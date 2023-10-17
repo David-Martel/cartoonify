@@ -4,10 +4,55 @@ import argparse
 import os
 import concurrent.futures
 
+def process_frame_cpu(frame):
+    # Convert the frame to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Apply bilateral filter to smoothen the image
+    gray = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
+
+    # Apply median blur to reduce noise
+    gray = cv2.medianBlur(gray, 7)
+
+    # Detect edges using adaptive thresholding
+    edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9)
+
+    # Apply a cartoon effect by combining the edges and the original frame
+    cartoon = cv2.bitwise_and(frame, frame, mask=edges)
+
+    return cartoon
+
+def process_frame_gpu(frame_gpu):
+    # Convert the frame to grayscale
+    gray = cv2.cuda.cvtColor(frame_gpu, cv2.COLOR_BGR2GRAY)
+
+    # Apply bilateral filter to smoothen the image
+    gray = cv2.cuda.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
+
+    # Apply median blur to reduce noise
+    gray = cv2.cuda.medianBlur(gray, 7)
+
+    # Detect edges using adaptive thresholding
+    edges = cv2.cuda.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9)
+
+    # Apply a cartoon effect by combining the edges and the original frame
+    cartoon = cv2.cuda.bitwise_and(frame_gpu, frame_gpu, mask=edges)
+
+    return cartoon
+
 def cartoonify_video(input_file, output_file=None, verbose=False, use_gpu=False):
     def print_verbose(message):
         if verbose:
             print(message)
+
+    # Check if CUDA is available and use it for acceleration if specified
+    if use_gpu and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        print_verbose("Using GPU for acceleration.")
+        cv2.cuda.printCudaDeviceInfo(0)
+        cv2.cuda.setDevice(0)
+    else:
+        use_gpu = False
+        print_verbose("GPU not available or not specified. Using CPU for processing.")
 
     # Open the video file
     cap = cv2.VideoCapture(input_file)
