@@ -55,37 +55,56 @@ def cartoonify_video(input_file, output_file=None, verbose=False, use_gpu=False)
         output_file = f"{base_filename}_cartoon{file_extension}"
 
     output_video = (
-        input_video.output(output_file, vf='format=yuv420p')
+        ffmpeg.output(
+            input_video.video,
+            output_file,
+            vf='format=yuv420p'
+        )
         .overwrite_output()
     )
 
-    with ffmpeg.run(output_video, quiet=True, overwrite_output=True) as process:
-        # Initialize video capture using OpenCV
-        with cv2.VideoCapture(input_file) as cap:
-            frame_queue = []
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame_queue.append(frame)
+    # Run the FFmpeg process
+    ffmpeg.run(output_video, quiet=True, overwrite_output=True)
 
-            def process_frame_with_queue(frame):
-                if use_gpu:
-                    frame_gpu = cv2.cuda_GpuMat()
-                    frame_gpu.upload(frame)
-                    cartoon_gpu = process_frame_gpu(frame_gpu)
-                    cartoon = cartoon_gpu.download()
-                else:
-                    cartoon = process_frame_cpu(frame)
-                return cartoon
+    # Initialize video capture using OpenCV
+    cap = cv2.VideoCapture(input_file)
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(executor.map(process_frame_with_queue, frame_queue))
+    frame_queue = []
 
-            for cartoon in results:
-                process.stdin.write(cartoon.tostring())
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_queue.append(frame)
+
+    def process_frame_with_queue(frame):
+        if use_gpu:
+            frame_gpu = cv2.cuda_GpuMat()
+            frame_gpu.upload(frame)
+            cartoon_gpu = process_frame_gpu(frame_gpu)
+            cartoon = cartoon_gpu.download()
+        else:
+            cartoon = process_frame_cpu(frame)
+
+        return cartoon
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        results = list(executor.map(process_frame_with_queue, frame_queue))
+
+    # Release video objects
+    cap.release()
 
     print_verbose("Cartoonification completed.")
+
+    # Write the cartoon frames to the output video using OpenCV
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_file, fourcc, cap.get(5), (int(cap.get(3)), int(cap.get(4))))
+
+    for cartoon in results:
+        out.write(cartoon)
+
+    out.release()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cartoonify a video file.")
