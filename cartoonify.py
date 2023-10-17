@@ -3,6 +3,7 @@ import numpy as np
 import argparse
 import os
 import concurrent.futures
+import ffmpeg
 
 def process_frame_cpu(frame):
     # Convert the frame to grayscale
@@ -45,48 +46,30 @@ def cartoonify_video(input_file, output_file=None, verbose=False, use_gpu=False)
         if verbose:
             print(message)
 
-    # Check if CUDA is available and use it for acceleration if specified
-    if use_gpu and cv2.cuda.getCudaEnabledDeviceCount() > 0:
-        print_verbose("Using GPU for acceleration.")
-        cv2.cuda.printCudaDeviceInfo(0)
-        cv2.cuda.setDevice(0)
-    else:
-        use_gpu = False
-        print_verbose("GPU not available or not specified. Using CPU for processing.")
+    # Open the video file using FFmpeg
+    input_video = ffmpeg.input(input_file)
 
-    # Open the video file
-    cap = cv2.VideoCapture(input_file)
+    # Get video properties using FFmpeg
+    video_info = input_video.output(video_bitrate='same', pix_fmt='yuv420p').get_args()
 
-    # Get video properties
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    frame_size = (int(cap.get(3)), int(cap.get(4)))
-    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-
-    # Get audio properties
-    audio_enabled = False
-    audio_fps = 0
-    audio_frame_size = 0
-    audio_codec = None
-    audio_writer = None
-
-    if cv2.haveVideoWriter_ffmpeg():
-        audio_fps = int(cap.get(cv2.CAP_PROP_FPS))
-        audio_frame_size = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        audio_codec = cv2.VideoWriter_fourcc(*'mp4v')
-        audio_enabled = True
-
-        if output_file is None:
-            base_filename, file_extension = os.path.splitext(input_file)
-            output_file = f"{base_filename}_cartoon{file_extension}"
-
-        audio_writer = cv2.VideoWriter(output_file, audio_codec, audio_fps, frame_size)
-
-    # Define the codec and create a VideoWriter object for the cartoon video
+    # Create FFmpeg process for writing the output video with the same encoding
     if output_file is None:
         base_filename, file_extension = os.path.splitext(input_file)
         output_file = f"{base_filename}_cartoon{file_extension}"
 
-    out = cv2.VideoWriter(output_file, fourcc, fps, frame_size)
+    output_video = (
+        ffmpeg.output(
+            input_video.video,
+            output_file,
+            *video_info,
+        )
+        .overwrite_output()
+    )
+
+    process = ffmpeg.run(output_video, quiet=True, overwrite_output=True)
+
+    # Initialize video capture using OpenCV
+    cap = cv2.VideoCapture(input_file)
 
     frame_queue = []
 
@@ -112,17 +95,14 @@ def cartoonify_video(input_file, output_file=None, verbose=False, use_gpu=False)
         results = list(executor.map(process_frame_with_queue, frame_queue))
 
     for cartoon in results:
-        out.write(cartoon)
-        if audio_enabled:
-            audio_writer.write(cartoon)
+        process.stdin.write(cartoon.tostring())
+
+    # Close FFmpeg process
+    process.stdin.close()
+    process.wait()
 
     # Release video objects
     cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-
-    if audio_enabled:
-        audio_writer.release()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cartoonify a video file.")
